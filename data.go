@@ -5,10 +5,11 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
-	_ "github.com/denisenkom/go-mssqldb"
 	"math/rand"
 	"strings"
 	"time"
+
+	_ "github.com/denisenkom/go-mssqldb"
 )
 
 var server = "bensql67.database.windows.net"
@@ -47,15 +48,22 @@ type user struct {
 }
 
 type savedAlbum struct {
-	id                int
-	name              string
-	mood              string
-	spotifyLinkString string
-	creator           string
+	ID                int
+	Name              string
+	Mood              string
+	SpotifyLinkString string
+	Creator           string
+}
+
+type albumResponse struct {
+	ID      int      `json:"id"`
+	Name    string   `json:"name"`
+	Mood    string   `json:"mood"`
+	Links   []string `json:"links"`
+	Creator string   `json:"creator"`
 }
 
 func dbInit() {
-
 }
 
 func generateRandomDigits(digits int) int {
@@ -88,25 +96,15 @@ func (u *user) newUser(newusername string, newpassword string) {
 	u.password = hex.EncodeToString(hash[:])
 }
 
-func (s *savedAlbum) newAlbum(newname string, newmood string, newspotifyLinkString string, newcreator string) {
-
-	s.id = generateRandomDigits(8)
-	s.name = newname
-	s.mood = newmood
-	s.spotifyLinkString = newspotifyLinkString
-	s.creator = newcreator
-}
-
 func createUser(username string, password string) (int, error) {
 	if err := ensureDB(); err != nil {
 		return 0, err
 	}
 
-	var newuser *user = &user{}
+	newuser := &user{}
 	newuser.newUser(username, password)
 
 	_, err := db.Exec("INSERT INTO users (id, username, password) VALUES (@p1, @p2, @p3)", newuser.id, newuser.username, newuser.password)
-
 	if err != nil {
 		return 0, err
 	}
@@ -122,15 +120,12 @@ func authenticate(username string, password string) (int, error) {
 	var id int
 
 	hash := sha256.Sum256([]byte(password))
-
 	hashedPassword := hex.EncodeToString(hash[:])
 
 	err := db.QueryRow("SELECT id FROM users WHERE username=@p1 AND password=@p2", username, hashedPassword).Scan(&id)
-
 	if err == sql.ErrNoRows {
 		return 0, err
 	}
-
 	if err != nil {
 		return 0, err
 	}
@@ -143,44 +138,23 @@ func createSavedAlbum(name string, mood string, spotifyLinks []string, creator s
 		return 0, err
 	}
 
-	spotifyLinkString := ""
+	spotifyLinkString := joinLinks(spotifyLinks)
 
-	for i := 0; i < len(spotifyLinks); i += 1 {
-		if i == len(spotifyLinks)-1 {
-			spotifyLinkString += spotifyLinks[i]
-		} else {
-			spotifyLinkString += spotifyLinks[i] + "."
-		}
+	newsavedAlbum := &savedAlbum{
+		ID:                generateRandomDigits(8),
+		Name:              name,
+		Mood:              mood,
+		SpotifyLinkString: spotifyLinkString,
+		Creator:           creator,
 	}
 
-	newsavedAlbum := &savedAlbum{}
-	newsavedAlbum.newAlbum(name, mood, spotifyLinkString, creator)
-
-	_, err := db.Exec("INSERT INTO savedAlbums (id, name, mood, spotifyLinkString, creator) VALUES (@p1, @p2, @p3, @p4, @p5)", newsavedAlbum.id, newsavedAlbum.name, newsavedAlbum.mood, newsavedAlbum.spotifyLinkString, newsavedAlbum.creator)
-
+	_, err := db.Exec("INSERT INTO savedAlbums (id, name, mood, spotifyLinkString, creator) VALUES (@p1, @p2, @p3, @p4, @p5)",
+		newsavedAlbum.ID, newsavedAlbum.Name, newsavedAlbum.Mood, newsavedAlbum.SpotifyLinkString, newsavedAlbum.Creator)
 	if err != nil {
 		return 0, err
 	}
 
-	return newsavedAlbum.id, nil
-}
-
-func createSavedAlbumWithSpotifyLinkStringAndID(id int, name string, mood string, spotifyLinkString string, creator string) (int, error) {
-	if err := ensureDB(); err != nil {
-		return 0, err
-	}
-
-	var newsavedAlbum *savedAlbum = &savedAlbum{}
-	newsavedAlbum.newAlbum(name, mood, spotifyLinkString, creator)
-	newsavedAlbum.id = id
-
-	_, err := db.Exec("INSERT INTO savedAlbums (id, name, mood, spotifyLinkString, creator) VALUES (@p1, @p2, @p3, @p4, @p5)", newsavedAlbum.id, newsavedAlbum.name, newsavedAlbum.mood, newsavedAlbum.spotifyLinkString, newsavedAlbum.creator)
-
-	if err != nil {
-		return 0, nil
-	}
-
-	return newsavedAlbum.id, nil
+	return newsavedAlbum.ID, nil
 }
 
 func deleteSavedAlbum(id int) error {
@@ -189,7 +163,6 @@ func deleteSavedAlbum(id int) error {
 	}
 
 	_, err := db.Exec("DELETE FROM savedAlbums WHERE id=@p1", id)
-
 	if err != nil {
 		return err
 	}
@@ -202,40 +175,17 @@ func addSongsToAlbum(id int, links []string) error {
 		return err
 	}
 
-	var name, mood, spotifyLinkString, creator string
-
-	err := db.QueryRow("SELECT name, mood, spotifyLinkString, creator FROM savedAlbums WHERE id=@p1", id).Scan(&name, &mood, &spotifyLinkString, &creator)
-
+	album, err := getAlbumByID(id)
 	if err != nil {
 		return err
 	}
 
-	err = deleteSavedAlbum(id)
+	current := parseLinks(album.SpotifyLinkString)
+	current = append(current, filterNonEmpty(links)...)
+	updated := joinLinks(current)
 
-	for i := 0; i < len(links); i += 1 {
-		if i == len(links)-1 {
-			spotifyLinkString += links[i]
-		} else {
-			spotifyLinkString += links[i] + "."
-		}
-	}
-
-	if err != nil {
-		return err
-	}
-
-	var replacementSavedAlbum *savedAlbum = &savedAlbum{}
-
-	replacementSavedAlbum.newAlbum(name, mood, spotifyLinkString, creator)
-	replacementSavedAlbum.id = id
-
-	_, err = createSavedAlbumWithSpotifyLinkStringAndID(replacementSavedAlbum.id, replacementSavedAlbum.name, replacementSavedAlbum.mood, replacementSavedAlbum.spotifyLinkString, replacementSavedAlbum.creator)
-
-	if err != nil {
-		return err
-	}
-
-	return nil
+	_, err = db.Exec("UPDATE savedAlbums SET spotifyLinkString=@p1 WHERE id=@p2", updated, id)
+	return err
 }
 
 func removeSongsFromAlbum(id int, links []string) error {
@@ -243,59 +193,99 @@ func removeSongsFromAlbum(id int, links []string) error {
 		return err
 	}
 
-	var name, mood, spotifyLinkString, creator string
-
-	err := db.QueryRow("SELECT name, mood, spotifyLinkString, creator FROM savedAlbums WHERE id=@p1", id).Scan(&name, &mood, &spotifyLinkString, &creator)
-
+	album, err := getAlbumByID(id)
 	if err != nil {
 		return err
 	}
 
-	err = deleteSavedAlbum(id)
-
-	if err != nil {
-		return err
-	}
-	var result string
-	for i := 0; i < len(links); i += 1 {
-		result = strings.ReplaceAll(spotifyLinkString, links[i]+".", "")
-	}
-
-	var replacementSavedAlbum *savedAlbum = &savedAlbum{}
-
-	replacementSavedAlbum.newAlbum(name, mood, result, creator)
-	replacementSavedAlbum.id = id
-
-	_, err = createSavedAlbumWithSpotifyLinkStringAndID(replacementSavedAlbum.id, replacementSavedAlbum.name, replacementSavedAlbum.mood, replacementSavedAlbum.spotifyLinkString, replacementSavedAlbum.creator)
-
-	if err != nil {
-		return err
+	current := parseLinks(album.SpotifyLinkString)
+	filterSet := make(map[string]struct{})
+	for _, l := range links {
+		if l == "" {
+			continue
+		}
+		filterSet[l] = struct{}{}
 	}
 
-	return nil
+	var remaining []string
+	for _, l := range current {
+		if _, exists := filterSet[l]; !exists {
+			remaining = append(remaining, l)
+		}
+	}
+
+	updated := joinLinks(remaining)
+	_, err = db.Exec("UPDATE savedAlbums SET spotifyLinkString=@p1 WHERE id=@p2", updated, id)
+	return err
 }
 
-
-func getAllAlbums(username string) []savedAlbum {
+func getAlbumByID(id int) (*savedAlbum, error) {
 	if err := ensureDB(); err != nil {
-		return []savedAlbum{}
+		return nil, err
+	}
+
+	var album savedAlbum
+	err := db.QueryRow("SELECT id, name, mood, spotifyLinkString, creator FROM savedAlbums WHERE id=@p1", id).
+		Scan(&album.ID, &album.Name, &album.Mood, &album.SpotifyLinkString, &album.Creator)
+	if err != nil {
+		return nil, err
+	}
+
+	return &album, nil
+}
+
+func getAllAlbums(username string) ([]albumResponse, error) {
+	if err := ensureDB(); err != nil {
+		return nil, err
 	}
 
 	rows, err := db.Query("SELECT id, name, mood, spotifyLinkString, creator FROM savedAlbums WHERE creator=@p1", username)
 	if err != nil {
-		return []savedAlbum{}
+		return nil, err
 	}
 	defer rows.Close()
 
-	var albums []savedAlbum
+	var albums []albumResponse
 
 	for rows.Next() {
 		var a savedAlbum
-		if err := rows.Scan(&a.id, &a.name, &a.mood, &a.spotifyLinkString, &a.creator); err != nil {
-			return []savedAlbum{}
+		if err := rows.Scan(&a.ID, &a.Name, &a.Mood, &a.SpotifyLinkString, &a.Creator); err != nil {
+			return nil, err
 		}
-		albums = append(albums, a)
+
+		albums = append(albums, albumResponse{
+			ID:      a.ID,
+			Name:    a.Name,
+			Mood:    a.Mood,
+			Links:   parseLinks(a.SpotifyLinkString),
+			Creator: a.Creator,
+		})
 	}
 
-	return albums
+	return albums, nil
+}
+
+func joinLinks(links []string) string {
+	filtered := filterNonEmpty(links)
+	return strings.Join(filtered, ".")
+}
+
+func parseLinks(raw string) []string {
+	if raw == "" {
+		return []string{}
+	}
+
+	parts := strings.Split(raw, ".")
+	return filterNonEmpty(parts)
+}
+
+func filterNonEmpty(values []string) []string {
+	var result []string
+	for _, v := range values {
+		trimmed := strings.TrimSpace(v)
+		if trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
 }

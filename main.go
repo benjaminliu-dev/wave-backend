@@ -2,111 +2,87 @@ package main
 
 import (
 	"net/http"
-	"strings"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
 )
 
-func main() {
+type authRequest struct {
+	Username string `json:"username" binding:"required"`
+	Password string `json:"password" binding:"required"`
+}
 
+type createAlbumRequest struct {
+	Name    string   `json:"name" binding:"required"`
+	Mood    string   `json:"mood" binding:"required"`
+	Links   []string `json:"links" binding:"required"`
+	Creator string   `json:"creator" binding:"required"`
+}
+
+type linksPayload struct {
+	Links []string `json:"links" binding:"required"`
+}
+
+func main() {
 	router := gin.Default()
 
 	router.POST("/auth/createUser", func(ctx *gin.Context) {
-		username := ctx.Query("username")
-		password := ctx.Query("password")
-
-		if username != "" && password != "" {
-			id, err := createUser(username, password)
-
-			if err != nil {
-
-				ctx.JSON(http.StatusInternalServerError, gin.H{
-					"error": err,
-				})
-				return
-			} else {
-				ctx.JSON(http.StatusCreated, gin.H{
-					"id": id,
-				})
-				return
-			}
-		} else {
-			ctx.JSON(http.StatusBadRequest, gin.H{
-				"error": "MISSINGPARAMS",
-			})
+		var req authRequest
+		if err := ctx.ShouldBindJSON(&req); err != nil {
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": "MISSINGPARAMS"})
 			return
 		}
+
+		id, err := createUser(req.Username, req.Password)
+		if err != nil {
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		ctx.JSON(http.StatusCreated, gin.H{"id": id})
 	})
 
-	router.POST("/auth/", func(ctx *gin.Context) {
-		username := ctx.Query("username")
-		password := ctx.Query("password")
-
-		if username != "" && password != "" {
-			id, err := authenticate(username, password)
-
-			if err != nil {
-				ctx.JSON(http.StatusInternalServerError, gin.H{
-					"error": err,
-				})
-				return
-			} else {
-				ctx.JSON(http.StatusOK, gin.H{
-					"id": id,
-				})
-			}
-		} else {
-			ctx.JSON(http.StatusBadRequest, gin.H{
-				"error": "MISSINGPARAMS",
-			})
+	router.POST("/auth", func(ctx *gin.Context) {
+		var req authRequest
+		if err := ctx.ShouldBindJSON(&req); err != nil {
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": "MISSINGPARAMS"})
 			return
 		}
+
+		id, err := authenticate(req.Username, req.Password)
+		if err != nil {
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		ctx.JSON(http.StatusOK, gin.H{"id": id})
 	})
 
 	router.POST("/albums/create", func(ctx *gin.Context) {
-		// Bind into a concrete struct to avoid nil dereference
-		album := savedAlbum{}
-		err := ctx.ShouldBindJSON(&album)
-
-		if album.id != 0 {
-			ctx.JSON(http.StatusBadRequest, gin.H{
-				"error": "BADPARAM",
-			})
+		var req createAlbumRequest
+		if err := ctx.ShouldBindJSON(&req); err != nil {
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
 
+		id, err := createSavedAlbum(req.Name, req.Mood, req.Links, req.Creator)
 		if err != nil {
-			ctx.JSON(http.StatusBadRequest, gin.H{
-				"error": err,
-			})
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
-		} else {
-			tempAlbum := &savedAlbum{}
-			tempAlbum.newAlbum(album.name, album.mood, album.spotifyLinkString, album.creator)
-			strs := strings.Split(album.spotifyLinkString, ".")
-			id, err := createSavedAlbum(tempAlbum.name, tempAlbum.mood, strs, tempAlbum.creator)
-
-			if err != nil {
-				ctx.JSON(http.StatusBadRequest, gin.H{
-					"error": err,
-				})
-				return
-			} else {
-				ctx.JSON(http.StatusCreated, gin.H{
-					"id": id,
-				})
-				return
-			}
 		}
+
+		ctx.JSON(http.StatusCreated, gin.H{"id": id})
 	})
 
 	router.GET("/albums/:username", func(ctx *gin.Context) {
 		username := ctx.Param("username")
-		albums := getAllAlbums(username)
-		ctx.JSON(http.StatusOK, gin.H{
-			"albums": albums,
-		})
+		albums, err := getAllAlbums(username)
+		if err != nil {
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		ctx.JSON(http.StatusOK, gin.H{"albums": albums})
 	})
 
 	router.DELETE("/albums/:id", func(ctx *gin.Context) {
@@ -117,15 +93,11 @@ func main() {
 			return
 		}
 		if err := deleteSavedAlbum(id); err != nil {
-			ctx.JSON(http.StatusInternalServerError, gin.H{"error": err})
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 		ctx.Status(http.StatusNoContent)
 	})
-
-	type linksPayload struct {
-		Links []string `json:"links"`
-	}
 
 	router.POST("/albums/:id/addsong", func(ctx *gin.Context) {
 		idStr := ctx.Param("id")
@@ -137,12 +109,12 @@ func main() {
 
 		var payload linksPayload
 		if err := ctx.ShouldBindJSON(&payload); err != nil {
-			ctx.JSON(http.StatusBadRequest, gin.H{"error": err})
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
 
 		if err := addSongsToAlbum(id, payload.Links); err != nil {
-			ctx.JSON(http.StatusInternalServerError, gin.H{"error": err})
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 
@@ -159,12 +131,12 @@ func main() {
 
 		var payload linksPayload
 		if err := ctx.ShouldBindJSON(&payload); err != nil {
-			ctx.JSON(http.StatusBadRequest, gin.H{"error": err})
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
 
 		if err := removeSongsFromAlbum(id, payload.Links); err != nil {
-			ctx.JSON(http.StatusInternalServerError, gin.H{"error": err})
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 
