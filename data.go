@@ -239,7 +239,9 @@ func getAllAlbums(username string) ([]albumResponse, error) {
 		return nil, err
 	}
 
-	rows, err := db.Query("SELECT id, name, mood, spotifyLinkString, creator FROM savedAlbums WHERE creator=@p1", username)
+	rows, err := db.Query(`
+    SELECT id, name, mood, spotifyLinkString, creator FROM savedAlbums WHERE CAST(creator AS NVARCHAR(MAX)) = @p1`, username)
+
 	if err != nil {
 		return nil, err
 	}
